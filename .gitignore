@@ -1,0 +1,9 @@
+venv/
+.venv/
+__pycache__/
+.env
+api_keys
+izach_messenger/.wwebjs_auth/
+izach_messenger/node_modules/
+*.db
+*.pyc
