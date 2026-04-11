@@ -1,105 +1,132 @@
 import ctypes
 import json
-import io
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import logging
+import os
+import cv2
+import numpy as np
 import pyautogui
 import pytesseract
 from PIL import Image, ImageGrab
-from google import genai
 
-# --- 1. DPI AWARENESS ---
+logger = logging.getLogger(__name__)
+
+# --- 1. CONFIGURATION ---
+# Path for local icons (Chrome, Spotify, etc.)
+ICON_DIR = "assets/icons" 
+if not os.path.exists(ICON_DIR):
+    os.makedirs(ICON_DIR)
+
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
 except:
     ctypes.windll.user32.SetProcessDPIAware()
 
-# --- 2. CONFIGURATION ---
-GOOGLE_API_KEY = "AIzaSyAnwa1AMP2C0aX0RFKz3b6cWPVb4vkI61E"
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-client = genai.Client(api_key=GOOGLE_API_KEY)
 
-# --- 3. LIVE FRAME BUFFER (The "Memory" Eye) ---
-# This runs in the background so iZACH "always" has the latest frame ready.
-latest_frame = None
-frame_lock = threading.Lock()
+class VisionManager:
+    def __init__(self):
+        self.latest_frame = None
+        self.frame_lock = threading.Lock()
+        self.ai_client = None
+        self.cooldown_period = 15  # Increased cooldown to protect your 3 keys
+        self.last_gemini_call = 0
 
+vm = VisionManager()
+
+def update_client(new_client):
+    vm.ai_client = new_client
+    logger.info("Vision: Synced with active API key.")
+
+# --- 2. PASSIVE DAEMON (Zero Cost) ---
 def screen_capture_daemon():
-    global latest_frame
     while True:
-        # Capture directly into RAM
-        img = ImageGrab.grab(all_screens=True)
-        with frame_lock:
-            latest_frame = img
-        time.sleep(0.4) # Refresh roughly 2.5 times per second
+        try:
+            img = ImageGrab.grab(all_screens=True)
+            with vm.frame_lock:
+                vm.latest_frame = img
+            time.sleep(0.5) 
+        except Exception as e:
+            logger.error(f"Capture Error: {e}")
 
-# Start the background "Eye"
 threading.Thread(target=screen_capture_daemon, daemon=True).start()
 
-# --- 4. OPTIMIZED UTILITIES ---
+# --- 3. LOCAL TOOLS (The "Quota Protectors") ---
 
-def get_latest_frame():
-    with frame_lock:
-        if latest_frame is None:
-            return None
-        return latest_frame.copy()
+def local_icon_match(target_desc, screen_cv):
+    """Checks the assets/icons folder for a matching .png file."""
+    for icon_file in os.listdir(ICON_DIR):
+        if target_desc.lower() in icon_file.lower():
+            template = cv2.imread(os.path.join(ICON_DIR, icon_file), 0)
+            res = cv2.matchTemplate(screen_cv, template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+            if max_val > 0.8: # 80% confidence threshold
+                h, w = template.shape
+                return (max_loc[0] + w//2, max_loc[1] + h//2)
+    return None
 
-def prepare_for_ai(img):
-    """Downsamples image to 540p and compresses to JPEG to speed up API upload."""
-    w, h = img.size
-    # Resizing cuts the data sent to Google by 75%
-    small_img = img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
-    img_byte_arr = io.BytesIO()
-    small_img.save(img_byte_arr, format='JPEG', quality=60)
-    return Image.open(img_byte_arr)
+def local_ocr_match(target_desc, screen_pil):
+    """Uses Tesseract to find text coordinates."""
+    data = pytesseract.image_to_data(screen_pil, output_type=pytesseract.Output.DICT)
+    for i, text in enumerate(data['text']):
+        if target_desc.lower() in text.lower() and text.strip() != "":
+            w, h = screen_pil.size
+            nx = int(((data['left'][i] + data['width'][i]//2) / w) * 1000)
+            ny = int(((data['top'][i] + data['height'][i]//2) / h) * 1000)
+            return (nx, ny)
+    return None
 
-# --- 5. PARALLEL ANALYSIS ---
+# --- 4. CORE LOGIC ---
 
-def analyze_screen_and_click(user_instruction):
-    print(f"⚡ iZACH Parallel Scan: '{user_instruction}'")
-    current_img = get_latest_frame()
-    if not current_img: return "Camera warming up..."
+def smart_locate_and_click(target_desc, active_client):
+    vm.ai_client = active_client
+    
+    with vm.frame_lock:
+        if vm.latest_frame is None: return "Sensors offline."
+        current_img = vm.latest_frame.copy()
 
-    # Compress the version we send to the AI
-    ai_img = prepare_for_ai(current_img)
+    # Convert to OpenCV format for icon matching
+    screen_cv = cv2.cvtColor(np.array(current_img), cv2.COLOR_RGB2GRAY)
 
-    with ThreadPoolExecutor() as executor:
-        # Run OCR and AI Vision at the same time
-        ocr_task = executor.submit(pytesseract.image_to_data, current_img, output_type=pytesseract.Output.DICT)
-        ai_task = executor.submit(client.models.generate_content, 
-                                 model="gemini-2.5-flash", 
-                                 contents=[f"Find center of '{user_instruction}'. Return ONLY JSON: {{'x': 0-1000, 'y': 0-1000}}", ai_img])
+    # STEP 1: Aggressive OCR (Text)
+    coords = local_ocr_match(target_desc, current_img)
+    if coords:
+        logger.info(f"Local Hit (OCR): Found '{target_desc}'")
+        execute_hardware_click(coords[0], coords[1])
+        return True
 
-        # 1. Try OCR first for text precision
-        data = ocr_task.result()
-        for i, text in enumerate(data['text']):
-            if user_instruction.lower() in text.lower() and text.strip() != "":
-                w, h = current_img.size
-                nx = int(((data['left'][i] + data['width'][i]//2) / w) * 1000)
-                ny = int(((data['top'][i] + data['height'][i]//2) / h) * 1000)
-                execute_click(nx, ny)
-                return
+    # STEP 2: Aggressive Icon Matching (OpenCV)
+    icon_coords = local_icon_match(target_desc, screen_cv)
+    if icon_coords:
+        logger.info(f"Local Hit (Icon): Found '{target_desc}'")
+        sw, sh = pyautogui.size()
+        nx, ny = int((icon_coords[0]/sw)*1000), int((icon_coords[1]/sh)*1000)
+        execute_hardware_click(nx, ny)
+        return True
 
-        # 2. Fallback to AI Vision for icons
-        try:
-            res_text = ai_task.result().text.replace("```json", "").replace("```", "").strip()
-            coords = json.loads(res_text)
-            execute_click(coords['x'], coords['y'])
-        except:
-            print("Target not found.")
+    # STEP 3: Gemini Fallback (Only if Local Fails + Cooldown Passed)
+    elapsed = time.time() - vm.last_gemini_call
+    if elapsed < vm.cooldown_period:
+        return f"COOLDOWN_{int(vm.cooldown_period - elapsed)}"
 
-def execute_click(nx, ny):
-    sw, sh = pyautogui.size()
-    tx = int((nx / 1000) * sw)
-    ty = int((ny / 1000) * sh)
-    pyautogui.click(tx, ty)
-
-def describe_screen():
-    img = get_latest_frame()
-    if not img: return "Sensors initializing."
-    ai_img = prepare_for_ai(img)
+    logger.warning(f"Local search failed for '{target_desc}'. Requesting Gemini Vision.")
+    vm.last_gemini_call = time.time()
+    
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=["Briefly describe the screen.", ai_img])
-        return response.text.strip()
-    except: return "Visual error."
+        # Resize to 720p to save tokens
+        ai_img = current_img.resize((1280, 720), Image.Resampling.LANCZOS)
+        response = vm.ai_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[f"Look at this screenshot. Find '{target_desc}' on screen. Return ONLY a JSON object like this: {{\"x\": 500, \"y\": 250}} where x and y are pixel coordinates (0-1000 scale) of the center of '{target_desc}'. No explanation, no markdown, just raw JSON.", ai_img]
+        )
+        coords = json.loads(response.text.replace("```json", "").replace("```", "").strip())
+        execute_hardware_click(coords['x'], coords['y'])
+        return True
+    except Exception as e:
+        if "429" in str(e): return "ROTATE_TRIGGERED"
+        return False
+
+def execute_hardware_click(nx, ny):
+    sw, sh = pyautogui.size()
+    pyautogui.click(int((nx/1000)*sw), int((ny/1000)*sh))
