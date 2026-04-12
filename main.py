@@ -37,11 +37,12 @@ load_dotenv()
 pyautogui.FAILSAFE = False
 
 GEMINI_KEYS = [
-    "AIzaSyDVxFVGci5YRItxSs0IZIrelUHPi4H3T2A",
-    "AIzaSyBAII9jOvsXVW4QTC7ttgiudMvLTl7iGRU",
-    "AIzaSyC72cbmHwKKelrSQEngLydqH0nSKcPSbbk"
+    "YOUR_GEMINI_KEY_1_HERE",
+    "YOUR_GEMINI_KEY_2_HERE",
+    "YOUR_GEMINI_KEY_3_HERE"
 ]
-GROQ_KEY   = "REMOVED"
+import os
+GROQ_KEY   = "YOUR_GROQ_KEY_HERE"
 VOICE      = "en-US-ChristopherNeural"
 import uuid
 TEMP_AUDIO = "speech.mp3"  # fallback, overridden per call
