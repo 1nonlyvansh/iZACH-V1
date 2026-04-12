@@ -78,6 +78,11 @@ def ui_command():
         return jsonify({"ok": False, "error": "Empty command"}), 400
 
     _log_message("YOU", text)
+    try:
+        from modules.ws_bridge import broadcast
+        broadcast({"type": "chat", "sender": "YOU", "text": text, "ts": time.strftime("%H:%M")})
+    except Exception:
+        pass
 
     try:
         if _chain_fn is None:
@@ -152,6 +157,24 @@ def ui_status():
         except Exception:
             pass
 
+        # Check WhatsApp bridge
+        wa_online = False
+        try:
+            import requests as _req
+            r = _req.get("http://localhost:3000/health", timeout=2)
+            wa_online = r.json().get("status") == "connected"
+        except Exception:
+            pass
+
+        # Check MMA agent
+        mma_online = False
+        try:
+            import requests as _req
+            r = _req.get("http://localhost:6060/health", timeout=2)
+            mma_online = r.status_code == 200
+        except Exception:
+            pass
+
         return jsonify({
             "ok":           True,
             "cpu":          round(cpu, 1),
@@ -161,6 +184,8 @@ def ui_status():
             "proc_cpu":     proc_cpu,
             "proc_mem":     proc_mem,
             "ts":           time.strftime("%H:%M:%S"),
+            "whatsapp":     wa_online,
+            "mma":          mma_online,
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

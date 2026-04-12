@@ -1,6 +1,6 @@
 
-from google import genai
-import os
+import google.generativeai as genai
+import os # noqa: F401
 
 # Your Key
 GOOGLE_API_KEY = "AIzaSyAnwa1AMP2C0aX0RFKz3b6cWPVb4vkI61E"

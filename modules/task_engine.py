@@ -22,27 +22,32 @@ class TaskEngine:
         while self.queue:
             task = self.queue.pop(0)
             print(f"[TASK EXEC]: {task}")
+            try:
+                # Phase 3: instant feedback before execution
+                from modules.response_generator import instant, smart, get_response_generator
+                rg = get_response_generator()
+                if rg:
+                    rg.instant(task.action)
 
-            # Phase 3: instant feedback before execution
-            from modules.response_generator import instant, smart, get_response_generator
-            rg = get_response_generator()
-            if rg:
-                rg.instant(task.action)
+                result = self.execute(task)
 
-            result = self.execute(task)
+                # Phase 2: smart natural response after execution
+                if rg and isinstance(result, str):
+                    target = task.data.get("song") or task.data.get("device") or ""
+                    status = "success" if result and "error" not in result.lower() and "couldn't" not in result.lower() else "failure"
+                    rg.smart(
+                        {"task": task.action, "target": target, "status": status, "detail": result},
+                        original_cmd=""
+                    )
+                elif isinstance(result, str):
+                    self.speak(result)
 
-            # Phase 2: smart natural response after execution
-            if rg and isinstance(result, str):
-                target = task.data.get("song") or task.data.get("device") or ""
-                status = "success" if result and "error" not in result.lower() and "couldn't" not in result.lower() else "failure"
-                rg.smart(
-                    {"task": task.action, "target": target, "status": status, "detail": result},
-                    original_cmd=""
-                )
-            elif isinstance(result, str):
-                self.speak(result)
-
-            task.status = "done"
+                task.status = "done"
+            except Exception as e:
+                import traceback
+                print(f"[TASK ENGINE ERROR] Task '{task.action}' failed: {e}")
+                traceback.print_exc()
+                task.status = "error"
 
     def execute(self, task):
         action = task.action

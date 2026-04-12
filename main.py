@@ -28,6 +28,8 @@ import modules.task_manager as task_manager
 from modules.context_manager import ContextManager
 from modules.whatsapp_handler import init_whatsapp
 
+
+
 # Load environment variables
 load_dotenv()
 
@@ -35,13 +37,14 @@ load_dotenv()
 pyautogui.FAILSAFE = False
 
 GEMINI_KEYS = [
-    "YOUR_GEMINI_KEY_HERE_1",
-    "YOUR_GEMINI_KEY_HERE_2",
-    "YOUR_GEMINI_KEY_HERE_3"
+    "AIzaSyDVxFVGci5YRItxSs0IZIrelUHPi4H3T2A",
+    "AIzaSyBAII9jOvsXVW4QTC7ttgiudMvLTl7iGRU",
+    "AIzaSyC72cbmHwKKelrSQEngLydqH0nSKcPSbbk"
 ]
-GROQ_KEY   = "YOUR_GROQ_KEY_HERE"
+GROQ_KEY   = "REMOVED"
 VOICE      = "en-US-ChristopherNeural"
-TEMP_AUDIO = "speech.mp3"
+import uuid
+TEMP_AUDIO = "speech.mp3"  # fallback, overridden per call
 
 # --- 3. GLOBAL OBJECTS ---
 SPEECH_QUEUE = queue.Queue()
@@ -62,6 +65,7 @@ except Exception as e:
 # --- 4. NEURAL TTS WORKER ---
 async def generate_and_play(text):
     global _speaking
+    audio_file = f"speech_{uuid.uuid4().hex[:8]}.mp3"
     try:
         from modules.interrupt_engine import get_interrupt_engine
         from modules.personality import extract_tone_rate
@@ -71,9 +75,22 @@ async def generate_and_play(text):
         clean_text, rate = extract_tone_rate(text)
         communicate = edge_tts.Communicate(clean_text, VOICE, rate=rate)
 
-        await communicate.save(TEMP_AUDIO)
-        pygame.mixer.music.load(TEMP_AUDIO)
+        await communicate.save(audio_file)
+        try:
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+        except Exception:
+            pass
+        await asyncio.sleep(0.15)
+        try:
+            pygame.mixer.music.stop()
+            pygame.mixer.music.unload()
+        except Exception:
+            pass
+        await asyncio.sleep(0.15)
+        pygame.mixer.music.load(audio_file)
         pygame.mixer.music.play()
+        
         _speaking = True
         ie.set_speaking(True)
 
@@ -83,7 +100,7 @@ async def generate_and_play(text):
             if words:
                 chars_total = len(text)
                 try:
-                    duration = pygame.mixer.Sound(TEMP_AUDIO).get_length()
+                    duration = pygame.mixer.Sound(audio_file).get_length()
                 except Exception:
                     duration = max(len(text) * 0.065, 1.5)
 
@@ -97,7 +114,12 @@ async def generate_and_play(text):
                     try:
                         app.root.after(0, lambda t=partial: app.update_live_text(t))
                     except RuntimeError:
-                        break
+                        pass
+                    try:
+                        from modules.ws_bridge import broadcast
+                        broadcast({"type": "live_text", "text": partial})
+                    except Exception:
+                        pass
                     await asyncio.sleep(word_time)
                     elapsed += word_time
 
@@ -114,10 +136,21 @@ async def generate_and_play(text):
                 app.root.after(0, lambda: app.update_live_text(""))
             except RuntimeError:
                 pass
+        try:
+            from modules.ws_bridge import broadcast
+            broadcast({"type": "live_text", "text": ""})
+        except Exception:
+            pass
 
     except Exception as e:
         print(f"[TTS ERROR] {e}")
     finally:
+        try:
+            import os as _os
+            if _os.path.exists(audio_file):
+                _os.remove(audio_file)
+        except Exception:
+            pass
         _speaking = False
         try:
             from modules.interrupt_engine import get_interrupt_engine
@@ -139,8 +172,12 @@ def tts_worker():
                 app.set_speaking(False)
         except queue.Empty:
             continue
+        except Exception as e:
+            import traceback
+            print(f"[TTS WORKER ERROR] {e}")
+            traceback.print_exc()
+            continue
     loop.close()
-
 
 def stop_speech():
     pygame.mixer.music.stop()
@@ -173,6 +210,11 @@ def speak(text, tone: str = "casual"):
         app.write_log(f"iZACH: {display_text}")
     if app and hasattr(app, 'set_speaking'):
         app.set_speaking(True)
+    try:
+        from modules.ws_bridge import broadcast
+        broadcast({"type": "chat", "sender": "iZACH", "text": display_text, "ts": time.strftime("%H:%M")})
+    except Exception:
+        pass
     try:
         from modules.personality import add_ssml_tone
         toned = add_ssml_tone(display_text, tone)
@@ -397,6 +439,31 @@ def start_brain(ui=None):
     else:
         print("[WAKE WORD] Disabled — always listening mode")
 
+    # Kill any leftover process on port 5051
+    import subprocess
+    try:
+        result = subprocess.run(
+            'for /f "tokens=5" %a in (\'netstat -aon ^| findstr :5051\') do taskkill /F /PID %a',
+            shell=True, capture_output=True
+        )
+    except Exception:
+        pass
+
+    # Launch WebSocket bridge
+    from modules.ws_bridge import start_ws_bridge
+    start_ws_bridge()
+
+    # Launch Electron UI
+    import subprocess
+    ui_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "izach-ui")
+    subprocess.Popen(
+        ["npm", "run", "electron:dev"],
+        cwd=ui_path,
+        shell=True,
+        creationflags=subprocess.CREATE_NEW_CONSOLE
+    )
+    print("[UI] Electron UI launching...")
+
     # 11. Voice loop
     def voice_loop():
         # Wait for mic to finish calibrating before starting
@@ -420,16 +487,39 @@ def start_brain(ui=None):
                     break
                 chain_engine.process(query)
             except Exception as e:
+                import traceback
                 print(f"[RUNTIME ERROR] {e}")
+                traceback.print_exc()
                 continue
-
     threading.Thread(target=voice_loop, daemon=True).start()
 
-    while not EXIT_SIGNAL:
-        time.sleep(1)
+    try:
+        while not EXIT_SIGNAL:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        safe_shutdown()
+    except Exception as e:
+        import traceback
+        print(f"[MAIN LOOP CRASH] {e}")
+        traceback.print_exc()
+        input("Press Enter to exit...")
 
 
 # --- 7. MAIN ---
 if __name__ == "__main__":
-    threading.Thread(target=tts_worker, daemon=False).start()
-    start_brain(ui=None)
+    threading.Thread(target=tts_worker, daemon=True).start()
+    try:
+        start_brain(ui=None)
+    except Exception as e:
+        import traceback
+        print(f"\n[FATAL CRASH] {e}")
+        traceback.print_exc()
+
+
+    # Keep process alive until Ctrl+C
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("[SYSTEM] Shutting down.")
+        safe_shutdown()

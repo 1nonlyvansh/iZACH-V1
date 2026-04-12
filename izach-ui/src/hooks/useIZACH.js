@@ -54,6 +54,37 @@ export function useIZACH() {
   const [notifications, setNotifications] = useState([])
   const chatBottomRef = useRef(null)
   const liveTimer     = useRef(null)
+  const wsRef         = useRef(null)
+
+  // ── WebSocket — voice chat + live text from Python backend ─
+  useEffect(() => {
+    function connect() {
+      const ws = new WebSocket('ws://localhost:5051')
+      wsRef.current = ws
+
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data)
+          if (data.type === 'chat') {
+            setMessages(prev => [
+              ...prev,
+              { id: Date.now() + Math.random(), sender: data.sender, text: data.text, ts: data.ts || nowStr(), type: 'normal' },
+            ])
+          } else if (data.type === 'live_text') {
+            setLiveText(data.text || '')
+            if (data.text) setIsSpeaking(true)
+            else setIsSpeaking(false)
+          }
+        } catch {}
+      }
+
+      ws.onclose = () => {
+        setTimeout(connect, 3000)
+      }
+    }
+    connect()
+    return () => { wsRef.current?.close() }
+  }, [])
 
   // ── auto-scroll ───────────────────────────────────────────
   useEffect(() => {
@@ -84,7 +115,12 @@ export function useIZACH() {
       // WhatsApp
       try {
         const r = await safeFetch(`${WA}/health`, {}, 2500)
-        if (mounted) setWaStatus(r.ok ? 'online' : 'offline')
+        if (r.ok) {
+          const d = await r.json().catch(() => ({}))
+          if (mounted) setWaStatus(d.status === 'connected' ? 'online' : 'offline')
+        } else {
+          if (mounted) setWaStatus('offline')
+        }
       } catch { if (mounted) setWaStatus('offline') }
 
       // MMA — FIX: was using wrong endpoint format

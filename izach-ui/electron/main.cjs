@@ -15,6 +15,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: false,
     },
     icon: path.join(__dirname, '../public/icon.png'),
     titleBarStyle: 'hidden',

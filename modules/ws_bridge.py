@@ -27,8 +27,11 @@ async def _handler(ws):
         _clients.discard(ws)
 
 async def _server():
-    async with websockets.serve(_handler, "localhost", 5051):
-        await asyncio.Future()  # run forever
+    try:
+        async with websockets.serve(_handler, "localhost", 5051):
+            await asyncio.Future()  # run forever
+    except OSError as e:
+        print(f"[WS] Port 5051 already in use: {e}")
 
 def start_ws_bridge():
     global _loop

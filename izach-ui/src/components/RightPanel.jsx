@@ -17,6 +17,19 @@ function Divider() {
 }
 
 // ── Spotify ───────────────────────────────────────────────────
+const BASE = 'http://localhost:5050'
+
+async function spotifyAction(action) {
+  const map = { prev: 'previous', playpause: 'playpause', next: 'next' }
+  try {
+    await fetch(`${BASE}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: map[action] }),
+    })
+  } catch {}
+}
+
 function SpotifyPanel({ track }) {
   const {
     playing, title, artist, device,
@@ -108,6 +121,33 @@ function SpotifyPanel({ track }) {
           </span>
         </div>
 
+        {/* Playback controls */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8 }}>
+          {[
+            { label: '⏮', action: 'prev' },
+            { label: playing ? '⏸' : '▶', action: 'playpause' },
+            { label: '⏭', action: 'next' },
+          ].map(btn => (
+            <button
+              key={btn.action}
+              onClick={() => spotifyAction(btn.action)}
+              style={{
+                background: 'rgba(0,229,255,0.06)',
+                border: '1px solid #0d2a3a',
+                borderRadius: 4,
+                color: '#00e5ff',
+                fontFamily: "'Share Tech Mono'",
+                fontSize: '13px',
+                width: 32, height: 28,
+                cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {btn.label}
+            </button>
+          ))}
+        </div>
+
         {/* Not playing notice */}
         {!playing && (
           <p style={{ color: '#1a4a5a', fontFamily: "'Share Tech Mono'", fontSize: '9px', letterSpacing: '0.1em', marginTop: 8 }}>
@@ -118,6 +158,8 @@ function SpotifyPanel({ track }) {
     </div>
   )
 }
+  
+
 
 // ── Status dot ────────────────────────────────────────────────
 function StatusDot({ status }) {

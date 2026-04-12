@@ -65,6 +65,8 @@ function createClient() {
     });
 
     client.on('message', async (msg) => {
+        if (msg.isStatus) return;
+        if (msg.from === 'status@broadcast') return;
         if (msg.fromMe) return;
         if (!acceptMessages) return;
         try {

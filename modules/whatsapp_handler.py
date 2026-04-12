@@ -171,7 +171,7 @@ Rules:
 - Do NOT start with "Vansh,"
 - Do NOT say "you have received" or "you've got a message"
 - Sound like a human telling a friend — casual, direct
-- If Hindi/Urdu: reply in Hindi
+- Always reply in English only, regardless of the message language
 - Max 15 words
 
 Examples of good responses:
